@@ -16,7 +16,7 @@ defmodule ExTwitter.API.Streaming do
   def stream_sample(options \\ []) do
     {options, configs} = seperate_configs_from_options(options)
     params = ExTwitter.Parser.parse_request_params(options)
-    pid = async_request(self, :get, "1.1/statuses/sample.json", params, configs)
+    pid = async_request(self, :stream, :get, "1.1/statuses/sample.json", params, configs)
     create_stream(pid, @default_stream_timeout)
   end
 
@@ -28,7 +28,17 @@ defmodule ExTwitter.API.Streaming do
   def stream_filter(options, timeout \\ @default_stream_timeout) do
     {options, configs} = seperate_configs_from_options(options)
     params = ExTwitter.Parser.parse_request_params(options)
-    pid = async_request(self, :post, "1.1/statuses/filter.json", params, configs)
+    pid = async_request(self, :stream, :post, "1.1/statuses/filter.json", params, configs)
+    create_stream(pid, timeout)
+  end
+
+  @doc """
+  Returns the User Stream
+  """
+  def stream_user(options, timeout \\ @default_stream_timeout) do
+    {options, configs} = seperate_configs_from_options(options)
+    params = ExTwitter.Parser.parse_request_params(options)
+    pid = async_request(self, :user, :get, "1.1/user.json", params, configs)
     create_stream(pid, timeout)
   end
 
@@ -54,13 +64,13 @@ defmodule ExTwitter.API.Streaming do
     end
   end
 
-  defp async_request(processor, method, path, params, configs) do
+  defp async_request(processor, stream_type, method, path, params, configs) do
     oauth = ExTwitter.Config.get_tuples |> ExTwitter.API.Base.verify_params
     consumer = {oauth[:consumer_key], oauth[:consumer_secret], :hmac_sha1}
 
     spawn(fn ->
       response = ExTwitter.OAuth.request_async(
-        method, request_url(path), params, consumer, oauth[:access_token], oauth[:access_token_secret])
+        method, request_url(stream_type, path), params, consumer, oauth[:access_token], oauth[:access_token_secret])
 
       case response do
         {:ok, request_id} ->
@@ -162,21 +172,94 @@ defmodule ExTwitter.API.Streaming do
 
   defp parse_control_message(message) do
     case message do
+      %{"direct_message" => dm} ->
+        {:stream, parse_direct_message(dm)}
+
       %{"delete" => tweet} ->
         {:stream, %ExTwitter.Model.DeletedTweet{status: tweet["status"]}}
+
+      %{"scrub_geo" => tweet} ->
+        {:stream, %ExTwitter.Model.ScrubUserGeo{
+                    id: tweet["user_id"],
+                    up_to_status_id: tweet["up_to_status_id"]}}
 
       %{"limit" => limit} ->
         {:stream, %ExTwitter.Model.Limit{track: limit["track"]}}
 
-      %{"warning" => warning} ->
+      %{"warning" => warning=%{code: "FALLING_BEHIND"}} ->
         {:stream, %ExTwitter.Model.StallWarning{
-                    code: warning["code"], message: warning["message"], percent_full: warning["percent_full"]}}
+                    message: warning["message"], percent_full: warning["percent_full"]}}
+
+      %{"warning" => warning=%{code: "FOLLOWS_OVER_LIMIT"}} ->
+        {:stream, %ExTwitter.Model.FollowsLimitWarning{
+                    message: warning["message"], user_id: warning["user_id"]}}
+
+      %{"friends" => list} when is_list(list) ->
+        {:stream, %ExTwitter.Model.FriendsList{list: list}}
+
+      event = %{"event" => type, "created_at" => at, "source" => source, "target" => target} ->
+        {:stream, %ExTwitter.Model.Event{
+                    event: type,
+                    created_at: at,
+                    source: create_struct(ExTwitter.Model.User, source),
+                    target: create_struct(ExTwitter.Model.User, target),
+                    target_object: parse_event_target_object(event)}}
+
+      %{"disconnect" => disconnect} ->
+        {:stream, %ExTwitter.Model.Disconnect{
+                    code: disconnect["code"],
+                    reason: disconnect["reason"],
+                    stream_name: disconnect["stream_name"]}}
+
+      %{"status_withheld" => %{"id" => id, "user_id" => user_id, "withheld_in_countries" => countries}} ->
+        {:stream, %ExTwitter.Model.WithheldTweet{id: id, user_id: id, in_countries: countries}}
+
+      %{"user_withheld" => %{"id" => id, "withheld_in_countries" => countries}} ->
+        {:stream, %ExTwitter.Model.WithheldUser{id: id, in_countries: countries}}
 
       true -> nil
     end
   end
 
-  defp request_url(path) do
+  # Convert `kv` keys to atoms and create a `struct` from it.
+  defp create_struct(struct, kv) do
+    struct(struct, kv |> Enum.map(fn({k,v}) -> {String.to_atom(k), v} end))
+  end
+
+  # Parses an Event target object
+  # https://dev.twitter.com/streaming/overview/messages-types#Events_event
+  @event_target_tweet ["favorite", "unfavorite"]
+  @event_target_list ["list_created", "list_destroyed", "list_updated", "list_member_added", "list_member_removed",
+    "list_user_subscribed", "list_user_unsubscribed"]
+
+    defp parse_event_target_object(event=%{"event" => type}) when type in @event_target_tweet do
+    create_struct(ExTwitter.Model.Tweet, Dict.get(event, "target_object"))
+  end
+
+  defp parse_event_target_object(event=%{"event" => type}) when type in @event_target_list do
+    create_struct(ExTwitter.Model.List, Dict.get(event, "target_object"))
+  end
+
+  defp parse_event_target_object(event), do: Map.get(event, "target_object", nil)
+
+  # Direct Message
+  defp parse_direct_message(dm) do
+    entities = create_struct(ExTwitter.Model.Entities, dm["entities"])
+    recipient = create_struct(ExTwitter.Model.User, dm["recipient"])
+    sender = create_struct(ExTwitter.Model.User, dm["sender"])
+    %ExTwitter.Model.DirectMessage{
+      id: dm["id"],
+      entities: entities,
+      recipient: recipient,
+      sender: sender,
+      text: dm["text"]}
+  end
+
+  defp request_url(:stream, path) do
     "https://stream.twitter.com/#{path}" |> to_char_list
+  end
+
+  defp request_url(:user, path) do
+    "https://userstream.twitter.com/#{path}" |> to_char_list
   end
 end

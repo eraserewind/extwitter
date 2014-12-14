@@ -46,6 +46,11 @@ defmodule ExTwitter.Model.Place do
     bounding_box: nil, attributes: nil
 end
 
+defmodule ExTwitter.Model.DirectMessage do
+  defstruct id: nil, created_at: nil, entities: nil, recipient: nil, sender: nil,
+    text: nil
+end
+
 defmodule ExTwitter.Model.Geo do
   defstruct type: nil, coordinates: nil
 end
@@ -54,10 +59,38 @@ defmodule ExTwitter.Model.DeletedTweet do
   defstruct status: nil
 end
 
+defmodule ExTwitter.Model.ScrubUserGeo do
+  defstruct id: nil, up_to_status_id: nil
+end
+
+defmodule ExTwitter.Model.WithheldTweet do
+  defstruct id: nil, user_id: nil, in_countries: []
+end
+
+defmodule ExTwitter.Model.WithheldUser do
+  defstruct id: nil, in_countries: []
+end
+
 defmodule ExTwitter.Model.Limit do
   defstruct track: nil
 end
 
 defmodule ExTwitter.Model.StallWarning do
-  defstruct code: nil, message: nil, percent_full: nil
+  defstruct message: nil, percent_full: nil
+end
+
+defmodule ExTwitter.Model.FollowsLimitWarning do
+  defstruct message: nil, user_id: nil
+end
+
+defmodule ExTwitter.Model.FriendsList do
+  defstruct list: []
+end
+
+defmodule ExTwitter.Model.Event do
+  defstruct event: nil, created_at: nil, source: nil, target: nil, target_object: nil
+end
+
+defmodule ExTwitter.Model.Disconnect do
+  defstruct code: nil, reason: nil, stream_name: nil
 end
